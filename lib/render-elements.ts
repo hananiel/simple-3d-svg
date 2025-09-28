@@ -12,7 +12,13 @@ function fmt(n: number): string {
   return Math.round(n).toString()
 }
 function fmtPrecise(n: number): string {
-  return (Math.round(n * 100) / 100).toString()
+  // Reduce precision from 2 decimals to 1 decimal for much smaller SVG size
+  return (Math.round(n * 10) / 10).toString()
+}
+function fmtCoord(n: number): string {
+  // For coordinates, round to nearest 0.1 to reduce SVG size significantly
+  const rounded = Math.round(n * 10) / 10
+  return rounded % 1 === 0 ? rounded.toString() : rounded.toString()
 }
 
 /*────────────── Camera & Projection ─────────────*/
@@ -299,8 +305,30 @@ export async function buildRenderElements(
           }
           const sym = texId.get(href)!
 
-          // Subdivide the face into projectionSubdivision x projectionSubdivision grid
-          const subdivisions = box.projectionSubdivision ?? 2
+          // Adaptive subdivision: use fewer subdivisions for smaller faces or distant objects
+          const rawSubdivisions = box.projectionSubdivision ?? 2
+
+          // Calculate face size in screen space to determine if high subdivision is needed
+          const topVertices = TOP.map(i => bp[i]).filter(Boolean) as Proj[]
+          if (topVertices.length !== 4) continue
+
+          const screenArea = Math.abs(
+            (topVertices[1]!.x - topVertices[0]!.x) * (topVertices[2]!.y - topVertices[0]!.y) -
+            (topVertices[2]!.x - topVertices[0]!.x) * (topVertices[1]!.y - topVertices[0]!.y)
+          )
+
+          // Adaptive subdivision based on screen space area
+          let subdivisions: number
+          if (screenArea < 1000) { // Very small face
+            subdivisions = 1
+          } else if (screenArea < 10000) { // Small face
+            subdivisions = Math.min(rawSubdivisions, 4)
+          } else if (screenArea < 50000) { // Medium face
+            subdivisions = Math.min(rawSubdivisions, 6)
+          } else { // Large face
+            subdivisions = Math.min(rawSubdivisions, 8) // Cap max subdivisions at 8
+          }
+
           const quadsPerSide = subdivisions
           for (let row = 0; row < quadsPerSide; row++) {
             for (let col = 0; col < quadsPerSide; col++) {
@@ -354,7 +382,7 @@ export async function buildRenderElements(
                 depth: cz,
                 href,
                 clip: id0,
-                points: `${fmtPrecise(u0)},${fmtPrecise(v0)} ${fmtPrecise(u1)},${fmtPrecise(v0)} ${fmtPrecise(u1)},${fmtPrecise(v1)}`,
+                points: `${fmtCoord(u0)},${fmtCoord(v0)} ${fmtCoord(u1)},${fmtCoord(v0)} ${fmtCoord(u1)},${fmtCoord(v1)}`,
                 sym,
               })
               // After pushing img for first triangle (p00,p10,p11)
@@ -382,7 +410,7 @@ export async function buildRenderElements(
                 depth: cz,
                 href,
                 clip: id1,
-                points: `${fmtPrecise(u0)},${fmtPrecise(v0)} ${fmtPrecise(u1)},${fmtPrecise(v1)} ${fmtPrecise(u0)},${fmtPrecise(v1)}`,
+                points: `${fmtCoord(u0)},${fmtCoord(v0)} ${fmtCoord(u1)},${fmtCoord(v1)} ${fmtCoord(u0)},${fmtCoord(v1)}`,
                 sym,
               })
               // After pushing img for second triangle (p00,p11,p01)
@@ -440,6 +468,14 @@ export async function buildRenderElements(
     H: number,
     focal: number,
   ): Face[] {
+    // For small numbers of faces, use simple z-sort instead of BSP tree
+    if (polys.length <= 20) {
+      return polys.sort((a, b) => {
+        const depthA = Math.max(...a.cam.map(v => v.z))
+        const depthB = Math.max(...b.cam.map(v => v.z))
+        return depthA - depthB // Front to back
+      })
+    }
     const EPS = 1e-6
     type Node = {
       face: Face
@@ -456,6 +492,15 @@ export async function buildRenderElements(
       const p1 = face.cam[1]!
       const p2 = face.cam[2]!
       const normal = cross(sub(p1, p0), sub(p2, p0))
+
+      // Normalize for consistent plane calculations
+      const normalLen = len(normal)
+      if (normalLen < EPS) {
+        // Degenerate face, skip
+        return build(list.slice(1))
+      }
+      const normalUnit = scale(normal, 1 / normalLen)
+
       const front: Face[] = []
       const back: Face[] = []
 
@@ -466,7 +511,7 @@ export async function buildRenderElements(
           neg = 0
         const d: number[] = []
         for (const v of f.cam) {
-          const dist = dot(normal, sub(v!, p0))
+          const dist = dot(normalUnit, sub(v!, p0))
           d.push(dist)
           if (dist > EPS) pos++
           else if (dist < -EPS) neg++
@@ -533,7 +578,7 @@ export async function buildRenderElements(
 
       return {
         face,
-        normal,
+        normal: normalUnit,
         point: p0,
         front: build(front),
         back: build(back),

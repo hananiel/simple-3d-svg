@@ -7,6 +7,12 @@ function fmt(n: number) {
   return Math.round(n) + ""
 }
 
+function fmtOptimized(n: number) {
+  // Round to nearest 0.5 for coordinate optimization
+  const rounded = Math.round(n * 2) / 2
+  return rounded % 1 === 0 ? rounded.toString() : rounded.toString()
+}
+
 export async function renderScene(
   scene: Scene,
   opt: {
@@ -93,7 +99,7 @@ export async function renderScene(
         const strokeAttr = f.stroke ? "" : ' stroke="none"'
         out.push(
           `    <polygon fill="${f.fill}"${strokeAttr} points="${f.pts
-            .map((p) => `${fmt(p.x)},${fmt(p.y)}`)
+            .map((p) => `${fmtOptimized(p.x)},${fmtOptimized(p.y)}`)
             .join(" ")}" />\n`,
         )
       } else {
@@ -121,7 +127,7 @@ export async function renderScene(
       const e = element.data
       out.push(
         `  <polyline fill="none" stroke="${e.color}" points="${e.pts
-          .map((p) => `${p.x},${p.y}`)
+          .map((p) => `${fmtOptimized(p.x)},${fmtOptimized(p.y)}`)
           .join(" ")}" />\n`,
       )
     }
